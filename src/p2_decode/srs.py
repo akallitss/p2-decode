@@ -185,7 +185,191 @@ def gray2bin(arr):
 
 
 # ---------------------------------------------------------------------------
-# streaming core
+# packet selection and the word decoder (shared by whole-file and streaming)
+# ---------------------------------------------------------------------------
+
+def select_vm3(u8, pstart, plen, src, t_ns, want, legacy_word_count=False):
+    """Keep the VM3 payloads long enough for one word, from the wanted sources.
+
+    want: uint32 source IPs, or None for every source.
+    """
+    min_len = 23 if legacy_word_count else 22    # header + at least one word
+    m = plen >= min_len
+    if want is not None:
+        m &= np.isin(src, want)
+    pstart, plen, src, t_ns = pstart[m], plen[m], src[m], t_ns[m]
+    if len(pstart):
+        magic = (u8[pstart + 4].astype(np.uint32) << 16 |
+                 u8[pstart + 5].astype(np.uint32) << 8 |
+                 u8[pstart + 6].astype(np.uint32))
+        m2 = magic == _VM3
+        pstart, plen, src, t_ns = pstart[m2], plen[m2], src[m2], t_ns[m2]
+    return pstart, plen, src, t_ns
+
+
+def packet_header(u8, pstart):
+    """(frame_counter, fec_id) of each VM3 payload."""
+    frame_counter = (u8[pstart].astype(np.uint32) << 24 |
+                     u8[pstart + 1].astype(np.uint32) << 16 |
+                     u8[pstart + 2].astype(np.uint32) << 8 |
+                     u8[pstart + 3].astype(np.uint32))
+    # reference: (u32_at_byte4 >> 4) & 0x0F, i.e. the upper nibble of byte 7
+    fec_id = ((u8[pstart + 7].astype(np.uint32) >> 4) & 0x0F).astype(np.uint8)
+    return frame_counter, fec_id
+
+
+class WordDecoder:
+    """6-byte words of VM3 payloads to raw hit columns, with persistent state.
+
+    The marker state (last SRS timestamp / trigger values per (fec, vmm)) and
+    the counters live here, so packets can be fed in any number of calls --
+    whole-file chunks or packets as they arrive in a growing capture -- and
+    the hits come out identical to one pass over the file.
+    """
+
+    def __init__(self, data_format="SRS", legacy_word_count=False,
+                 max_words=MAX_WORDS):
+        if data_format not in ("SRS", "TRG"):
+            raise ValueError(f"data_format must be 'SRS' or 'TRG', got {data_format!r}")
+        self.data_format = data_format
+        self.legacy_word_count = legacy_word_count
+        self.max_words = max_words
+        self.carry = np.zeros((3, _NKEYS), dtype=np.uint64)
+        self.hits_per_fec = np.zeros(16, dtype=np.int64)
+        self.markers_per_fec = np.zeros(16, dtype=np.int64)
+        self.n_vm3 = 0
+        self.n_markers = 0
+        self.n_hits = 0
+        self.n_invalid = 0
+        self.n_words = 0
+        self.n_chunks = 0
+        self.off_seen = set()
+
+    def n_words_of(self, plen):
+        if self.legacy_word_count:
+            # for i in range(0, len(block) - 22, 6): read 6 bytes at i + 16
+            span = plen - 22
+            return np.where(span > 0, (span + 5) // 6, 0)
+        # a trailing partial word (never seen in DAQ data) is ignored
+        return (plen - 16) // 6
+
+    def decode(self, u8, pstart, plen, frame_counter, fec_id):
+        """Yield raw hit columns for these packets, in chunks of <= max_words."""
+        nwords = self.n_words_of(plen)
+        total = int(nwords.sum())
+        self.n_words += total
+        if total == 0:
+            return
+
+        # Split the packet list so no chunk decodes more than max_words words
+        # at once. A 2 GB capture holds ~3e8 words; materialising those in one
+        # go would blow the 80 % RAM kill the watcher enforces. Chunks always
+        # break on packet boundaries, and marker state is carried across them.
+        cum = np.cumsum(nwords)
+        bounds = [0]
+        while bounds[-1] < len(pstart):
+            done = int(cum[bounds[-1] - 1]) if bounds[-1] > 0 else 0
+            nxt = int(np.searchsorted(cum, done + self.max_words, side="left")) + 1
+            bounds.append(min(max(nxt, bounds[-1] + 1), len(pstart)))
+        self.n_chunks += len(bounds) - 1
+
+        for ci in range(len(bounds) - 1):
+            lo, hi = bounds[ci], bounds[ci + 1]
+            c_start, c_len = pstart[lo:hi], nwords[lo:hi]
+            c_total = int(c_len.sum())
+            if c_total == 0:
+                continue
+
+            pkt_of_word = np.repeat(np.arange(hi - lo, dtype=np.int64), c_len)
+            starts = np.cumsum(c_len) - c_len
+
+            # Copy each packet's word region into one contiguous buffer with
+            # sequential slice reads. Fancy-indexing the memmap instead costs
+            # ~3.5 s/GB, because every gather round-trips memmap.__getitem__.
+            wbuf = np.empty(c_total * 6, dtype=np.uint8)
+            for i in range(hi - lo):
+                n = int(c_len[i])
+                if n:
+                    s = int(c_start[i]) + 16
+                    o = int(starts[i]) * 6
+                    wbuf[o:o + n * 6] = u8[s:s + n * 6]
+            w6 = wbuf.reshape(c_total, 6)
+            d1 = w6[:, :4].copy().view(">u4").ravel().astype(np.uint32)
+            d2 = w6[:, 4:6].copy().view(">u2").ravel().astype(np.uint32)
+            del wbuf, w6
+
+            is_hit = (d2 & 0x8000) != 0
+            hit_pos = np.flatnonzero(is_hit)
+            mrk_pos = np.flatnonzero(~is_hit)
+            self.n_markers += len(mrk_pos)
+
+            c_fec = fec_id[lo:hi]
+            self.markers_per_fec += np.bincount(c_fec[pkt_of_word[mrk_pos]], minlength=16)
+            h1 = d1[hit_pos]
+            h2 = d2[hit_pos]
+            hit_fec = c_fec[pkt_of_word[hit_pos]]
+            vmm = ((h1 >> 22) & 0x1F).astype(np.uint8)
+            hit_key = hit_fec.astype(np.int64) * 32 + vmm.astype(np.int64)
+
+            srs_ts, trg_time, trg_ctr, self.carry = _decode_markers(
+                d1, d2, mrk_pos, c_fec, pkt_of_word, self.data_format,
+                hit_pos, hit_key, self.carry)
+            del d1, d2
+
+            ch = ((h2 >> 8) & 0x3F).astype(np.uint8)
+            adc = ((h1 >> 12) & 0x3FF).astype(np.uint16)
+            ot = ((h2 >> 14) & 0x1).astype(np.uint8)
+            raw_off = ((h1 >> 27) & 0x1F).astype(np.int16)
+            bcid_raw = (h1 & 0xFFF).astype(np.uint16)
+            tdc = (h2 & 0xFF).astype(np.uint8)
+            time_col = frame_counter[lo:hi][pkt_of_word[hit_pos]]
+            offset = np.where(raw_off < 16, raw_off, raw_off - 32).astype(np.int8)
+
+            self.n_hits += len(hit_pos)
+            self.hits_per_fec += np.bincount(hit_fec, minlength=16)
+            self.n_invalid += int((offset < np.int8(-1)).sum())
+            if len(offset):
+                self.off_seen.update(np.unique(offset).tolist())
+            # packets yielding >=1 hit; pkt_of_word is non-decreasing and chunks
+            # never split a packet, so distinct count == transitions + 1
+            if len(hit_pos):
+                pw = pkt_of_word[hit_pos]
+                self.n_vm3 += int(np.count_nonzero(np.diff(pw))) + 1
+
+            yield {
+                "fec": hit_fec,
+                "vmm": vmm,
+                "time": time_col,
+                "ch": ch,
+                "adc": adc,
+                "over_threshold": ot.astype(bool),
+                "offset": offset,
+                "bcid": gray2bin(bcid_raw),
+                "tdc": tdc,
+                "srs_timestamp": srs_ts,
+                "trigger_time": trg_time,
+                "trigger_counter": trg_ctr.astype(np.uint16),
+            }
+
+    def meta(self, n_packets, src_ips):
+        return {
+            "n_packets": int(n_packets),
+            # counts packets yielding >= 1 hit, matching the reference's
+            # `if len(fec_buf) > n_before` test (marker-only packets do not count)
+            "n_vm3_packets": int(self.n_vm3),
+            "n_hits": int(self.n_hits),
+            "fec_ips": sorted(src_ips),
+            "data_format": self.data_format,
+            "n_words": int(self.n_words),
+            "n_markers": int(self.n_markers),
+            "n_chunks": int(self.n_chunks),
+            "n_invalid_offset": int(self.n_invalid),
+            "offset_constant": bool(len(self.off_seen) == 1),
+        }
+
+
+# ---------------------------------------------------------------------------
+# whole-file core
 # ---------------------------------------------------------------------------
 
 def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
@@ -193,9 +377,9 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
                 legacy_word_count=False):
     """Yield the raw hit columns (RAW_COLUMNS) one chunk at a time.
 
-    This is the streaming core shared by `decode` (which concatenates) and
-    `decode_to` (which writes each chunk straight to disk and drops it). Both
-    therefore produce identical values by construction.
+    This is the core shared by `decode` (which concatenates) and `decode_to`
+    (which writes each chunk straight to disk and drops it). Both therefore
+    produce identical values by construction.
 
     `calibration` is accepted for signature compatibility and unused here: it
     only enters the derived columns (see `derive`).
@@ -208,8 +392,7 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     1 word in 1492 for a full 8968-byte frame. Use it only to compare with
     stores made by those parsers.
     """
-    if data_format not in ("SRS", "TRG"):
-        raise ValueError(f"data_format must be 'SRS' or 'TRG', got {data_format!r}")
+    wd = WordDecoder(data_format, legacy_word_count, max_words)
     if meta is None:
         meta = {}
 
@@ -225,158 +408,24 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         src_ips = set(found)
     want = np.array([ip_u32(s) for s in sorted(src_ips)], dtype=np.uint32)
 
-    # --- select VM3 packets from the wanted FEC(s) ---
-    min_len = 23 if legacy_word_count else 22    # header + at least one word
-    m = (plen >= min_len) & np.isin(src, want)
-    pstart, plen, t_ns = pstart[m], plen[m], t_ns[m]
-    if len(pstart):
-        magic = (u8[pstart + 4].astype(np.uint32) << 16 |
-                 u8[pstart + 5].astype(np.uint32) << 8 |
-                 u8[pstart + 6].astype(np.uint32))
-        m2 = magic == _VM3
-        pstart, plen, t_ns = pstart[m2], plen[m2], t_ns[m2]
-
+    pstart, plen, _src, t_ns = select_vm3(u8, pstart, plen, src, t_ns, want,
+                                          legacy_word_count)
     if len(pstart) == 0:
         meta.update(_empty_meta(n_packets, src_ips, data_format))
         return
 
-    # --- per-packet header: frame counter and FEC id ---
-    frame_counter = (u8[pstart].astype(np.uint32) << 24 |
-                     u8[pstart + 1].astype(np.uint32) << 16 |
-                     u8[pstart + 2].astype(np.uint32) << 8 |
-                     u8[pstart + 3].astype(np.uint32))
-    # reference: (u32_at_byte4 >> 4) & 0x0F, i.e. the upper nibble of byte 7
-    fec_id = ((u8[pstart + 7].astype(np.uint32) >> 4) & 0x0F).astype(np.uint8)
+    frame_counter, fec_id = packet_header(u8, pstart)
     capture = _capture_meta(fec_id, plen, t_ns, frame_counter)
-
-    # --- flatten every 6-byte data word, in file order, from byte 16 ---
-    if legacy_word_count:
-        # for i in range(0, len(block) - 22, 6): read 6 bytes at i + 16
-        span = plen - 22
-        nwords = np.where(span > 0, (span + 5) // 6, 0)
-    else:
-        # a trailing partial word (never seen in DAQ data) is ignored
-        nwords = (plen - 16) // 6
-    total = int(nwords.sum())
-    if total == 0:
+    if int(wd.n_words_of(plen).sum()) == 0:
         meta.update(_empty_meta(n_packets, src_ips, data_format))
         return
 
-    # Split the packet list so no chunk decodes more than max_words words at
-    # once. A 2 GB capture holds ~3e8 words; materialising those in one go
-    # would blow the 80 % RAM kill the watcher enforces. Chunks always break on
-    # packet boundaries, and marker state is carried across them.
-    cum = np.cumsum(nwords)
-    bounds = [0]
-    while bounds[-1] < len(pstart):
-        done = int(cum[bounds[-1] - 1]) if bounds[-1] > 0 else 0
-        nxt = int(np.searchsorted(cum, done + max_words, side="left")) + 1
-        bounds.append(min(max(nxt, bounds[-1] + 1), len(pstart)))
+    yield from wd.decode(u8, pstart, plen, frame_counter, fec_id)
 
-    carry = np.zeros((3, _NKEYS), dtype=np.uint64)
-    hits_per_fec = np.zeros(16, dtype=np.int64)
-    markers_per_fec = np.zeros(16, dtype=np.int64)
-    n_vm3 = 0
-    n_markers = 0
-    n_hits = 0
-    n_invalid = 0
-    off_seen = set()
-
-    for ci in range(len(bounds) - 1):
-        lo, hi = bounds[ci], bounds[ci + 1]
-        c_start, c_len = pstart[lo:hi], nwords[lo:hi]
-        c_total = int(c_len.sum())
-        if c_total == 0:
-            continue
-
-        pkt_of_word = np.repeat(np.arange(hi - lo, dtype=np.int64), c_len)
-        starts = np.cumsum(c_len) - c_len
-
-        # Copy each packet's word region into one contiguous buffer with
-        # sequential slice reads. Fancy-indexing the memmap instead costs
-        # ~3.5 s/GB, because every gather round-trips memmap.__getitem__.
-        wbuf = np.empty(c_total * 6, dtype=np.uint8)
-        for i in range(hi - lo):
-            n = int(c_len[i])
-            if n:
-                s = int(c_start[i]) + 16
-                o = int(starts[i]) * 6
-                wbuf[o:o + n * 6] = u8[s:s + n * 6]
-        w6 = wbuf.reshape(c_total, 6)
-        d1 = w6[:, :4].copy().view(">u4").ravel().astype(np.uint32)
-        d2 = w6[:, 4:6].copy().view(">u2").ravel().astype(np.uint32)
-        del wbuf, w6
-
-        is_hit = (d2 & 0x8000) != 0
-        hit_pos = np.flatnonzero(is_hit)
-        mrk_pos = np.flatnonzero(~is_hit)
-        n_markers += len(mrk_pos)
-
-        c_fec = fec_id[lo:hi]
-        markers_per_fec += np.bincount(c_fec[pkt_of_word[mrk_pos]], minlength=16)
-        h1 = d1[hit_pos]
-        h2 = d2[hit_pos]
-        hit_fec = c_fec[pkt_of_word[hit_pos]]
-        vmm = ((h1 >> 22) & 0x1F).astype(np.uint8)
-        hit_key = hit_fec.astype(np.int64) * 32 + vmm.astype(np.int64)
-
-        srs_ts, trg_time, trg_ctr, carry = _decode_markers(
-            d1, d2, mrk_pos, c_fec, pkt_of_word, data_format,
-            hit_pos, hit_key, carry)
-        del d1, d2
-
-        ch = ((h2 >> 8) & 0x3F).astype(np.uint8)
-        adc = ((h1 >> 12) & 0x3FF).astype(np.uint16)
-        ot = ((h2 >> 14) & 0x1).astype(np.uint8)
-        raw_off = ((h1 >> 27) & 0x1F).astype(np.int16)
-        bcid_raw = (h1 & 0xFFF).astype(np.uint16)
-        tdc = (h2 & 0xFF).astype(np.uint8)
-        time_col = frame_counter[lo:hi][pkt_of_word[hit_pos]]
-        offset = np.where(raw_off < 16, raw_off, raw_off - 32).astype(np.int8)
-
-        n_hits += len(hit_pos)
-        hits_per_fec += np.bincount(hit_fec, minlength=16)
-        n_invalid += int((offset < np.int8(-1)).sum())
-        if len(offset):
-            off_seen.update(np.unique(offset).tolist())
-        # packets yielding >=1 hit; pkt_of_word is non-decreasing and chunks
-        # never split a packet, so distinct count == transitions + 1
-        if len(hit_pos):
-            pw = pkt_of_word[hit_pos]
-            n_vm3 += int(np.count_nonzero(np.diff(pw))) + 1
-
-        yield {
-            "fec": hit_fec,
-            "vmm": vmm,
-            "time": time_col,
-            "ch": ch,
-            "adc": adc,
-            "over_threshold": ot.astype(bool),
-            "offset": offset,
-            "bcid": gray2bin(bcid_raw),
-            "tdc": tdc,
-            "srs_timestamp": srs_ts,
-            "trigger_time": trg_time,
-            "trigger_counter": trg_ctr.astype(np.uint16),
-        }
-
-    meta.update({
-        "n_packets": int(n_packets),
-        # counts packets yielding >= 1 hit, matching the reference's
-        # `if len(fec_buf) > n_before` test (marker-only packets do not count)
-        "n_vm3_packets": int(n_vm3),
-        "n_hits": int(n_hits),
-        "fec_ips": sorted(src_ips),
-        "data_format": data_format,
-        "n_words": int(total),
-        "n_markers": int(n_markers),
-        "n_chunks": len(bounds) - 1,
-        "n_invalid_offset": int(n_invalid),
-        "offset_constant": bool(len(off_seen) == 1),
-    })
+    meta.update(wd.meta(n_packets, src_ips))
     for fec, d in capture["per_fec"].items():
-        d["hits"] = int(hits_per_fec[int(fec)])
-        d["markers"] = int(markers_per_fec[int(fec)])
+        d["hits"] = int(wd.hits_per_fec[int(fec)])
+        d["markers"] = int(wd.markers_per_fec[int(fec)])
     meta["capture"] = capture
     if legacy_word_count:
         meta["legacy_word_count"] = True

@@ -9,7 +9,7 @@ pads here — that is `p2-mapping`. Part of the P2 readout software split
 
 ```bash
 pip install -e /path/to/p2-decode          # development checkout
-pip install "p2-decode @ git+<repo-url>@v0.3.0"   # pinned, for production
+pip install "p2-decode @ git+<repo-url>@v0.4.0"   # pinned, for production
 ```
 
 Needs only numpy and pandas.
@@ -23,6 +23,11 @@ hits, meta = decode("capture.pcapng")              # whole capture, DataFrame
 meta = decode_to("capture.pcapng", "store/cap1")   # streamed to a column store
 hits, meta = load_frame("store/cap1")              # read it back
 for cols in iter_chunks("capture.pcapng"): ...     # bounded memory
+
+from p2_decode import StreamDecoder                # a capture still being written
+sd = StreamDecoder("growing.pcapng")
+cols, info = sd.poll()                             # hits since the last poll (or None)
+sd.meta()                                          # cumulative, as decode() reports it
 ```
 
 ```bash
@@ -37,6 +42,7 @@ p2-decode capture.pcapng [--format SRS|TRG] [--out-dir DIR] [--max-packets N]
 | `srs` | SRS header, 6-byte VMM words, marker state machine, FEC IP detection |
 | `calibration` | derived columns (timing, calibrated ADC), vmm-sdat calibration loader |
 | `api`, `store` | in-memory decode; streaming `.npy` column store |
+| `follow` | `PcapngFollower` (complete blocks appended since the last read), `StreamDecoder` (polls with marker state carried over) |
 | `schema` | column names, dtypes, timing constants, `SCHEMA_VERSION` |
 
 ## Hits schema (v1)
@@ -61,6 +67,13 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.4.0** decodes a capture while dumpcap writes it: `StreamDecoder.poll()`
+  returns the hits that arrived since the last poll. The per-packet core is now
+  `WordDecoder`, shared with the whole-file path; streaming a real capture in 40
+  random byte pieces gives exactly the hits and meta of decoding it whole
+  (`tests/test_follow.py`, SRS and TRG). With `src_ips=None` the stream keeps
+  every VM3 source rather than those of the first 500 packets; for one FEC these
+  agree.
 - **0.3.1** the synthetic-capture builder used by the tests is now
   `p2_decode.testing`, so other packages' tests can use it.
 - **0.3.0** adds `meta["capture"]`, for monitoring: `t_first_ns` / `t_last_ns`

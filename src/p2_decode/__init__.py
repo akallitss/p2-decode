@@ -8,22 +8,24 @@ Layers, bottom up:
     srs          SRS frames and 6-byte VMM words; marker state machine
     calibration  derived columns (timing, calibrated ADC); calibration loader
     api, store   whole-capture decode in memory, or streamed to a column store
+    follow       a capture still being written: PcapngFollower, StreamDecoder
 """
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 from .api import decode                                         # noqa: E402
 from .calibration import derive, load_calibration               # noqa: E402
+from .follow import PcapngFollower, StreamDecoder               # noqa: E402
 from .pcapng import read_packets                                # noqa: E402
 from .schema import (CLOCK_PERIOD_NS, COLUMN_DTYPES, COLUMNS,   # noqa: E402
                      DERIVED_COLUMNS, RAW_COLUMNS, SCHEMA_VERSION, empty_hits)
-from .srs import MAX_WORDS, detect_fec_ips, iter_chunks         # noqa: E402
+from .srs import MAX_WORDS, WordDecoder, detect_fec_ips, iter_chunks  # noqa: E402
 from .store import HitWriter, decode_to, load_frame, load_hits  # noqa: E402
 
 __all__ = [
     "decode", "decode_to", "load_hits", "load_frame", "derive",
     "load_calibration", "iter_chunks", "read_packets", "detect_fec_ips",
-    "HitWriter", "empty_hits", "COLUMNS", "RAW_COLUMNS", "DERIVED_COLUMNS",
+    "HitWriter", "empty_hits", "PcapngFollower", "StreamDecoder", "WordDecoder", "COLUMNS", "RAW_COLUMNS", "DERIVED_COLUMNS",
     "COLUMN_DTYPES", "CLOCK_PERIOD_NS", "MAX_WORDS", "SCHEMA_VERSION",
     "__version__",
 ]

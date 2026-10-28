@@ -170,12 +170,7 @@ def read_packets(path, max_packets=None, times=False):
     walked = walk_blocks(path, max_packets=max_packets, times=times)
     u8, off, caplen, linktypes = walked[:4]
     t_ns = walked[4] if times else None
-
-    if linktypes and any(lt != _LINKTYPE_ETHERNET for lt in linktypes):
-        raise ValueError(
-            f"{path}: link type(s) {sorted(set(linktypes))} -- only Ethernet (1) "
-            "is supported; the DAQ captures Ethernet."
-        )
+    check_linktypes(linktypes, path)
 
     n_packets = len(off)
     if max_packets is not None and n_packets > max_packets:
@@ -190,6 +185,26 @@ def read_packets(path, max_packets=None, times=False):
         out = (u8, empty, empty, np.zeros(0, dtype=np.uint32), 0)
         return out + ((np.zeros(0),) if times else ())
 
+    pstart, plen, src, keep = udp_payloads(u8, off, caplen)
+    out = (u8, pstart, plen, src, n_packets)
+    return out + ((t_ns[keep],) if times else ())
+
+
+def check_linktypes(linktypes, where):
+    if linktypes and any(lt != _LINKTYPE_ETHERNET for lt in linktypes):
+        raise ValueError(
+            f"{where}: link type(s) {sorted(set(linktypes))} -- only Ethernet (1) "
+            "is supported; the DAQ captures Ethernet."
+        )
+
+
+def udp_payloads(u8, off, caplen):
+    """Ethernet/IPv4/UDP payloads of packets at `off` in `u8`, vectorised.
+
+    Returns (payload_start, payload_len, src_ip_u32, keep): the first three for
+    the UDP packets only, `keep` the boolean mask over the input packets.
+    """
+    n_packets = len(off)
     # --- Ethernet, with any number of VLAN tags (802.1Q / 802.1ad) ---
     ok = caplen >= 14
     ethertype = np.zeros(n_packets, dtype=np.uint32)
@@ -238,9 +253,7 @@ def read_packets(path, max_packets=None, times=False):
         avail = off[idx] + caplen[idx] - pstart[idx]
         plen[idx] = np.minimum(np.maximum(udp_len - 8, 0), avail)
     keep = plen > 0
-
-    out = (u8, pstart[keep], plen[keep], src[keep], n_packets)
-    return out + ((t_ns[keep],) if times else ())
+    return pstart[keep], plen[keep], src[keep], keep
 
 
 def ip_str(v):
