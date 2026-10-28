@@ -10,7 +10,7 @@ Layers, bottom up:
     api, store   whole-capture decode in memory, or streamed to a column store
 """
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 from .api import decode                                         # noqa: E402
 from .calibration import derive, load_calibration               # noqa: E402

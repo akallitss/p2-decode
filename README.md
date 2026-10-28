@@ -61,6 +61,8 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.3.1** the synthetic-capture builder used by the tests is now
+  `p2_decode.testing`, so other packages' tests can use it.
 - **0.3.0** adds `meta["capture"]`, for monitoring: `t_first_ns` / `t_last_ns`
   (pcapng capture times, ns since the epoch, honouring `if_tsresol`),
   `live_time_s`, `udp_payload_bytes`, and per FEC `packets`,

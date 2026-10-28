@@ -3,7 +3,7 @@ import pytest
 
 import p2_decode
 from p2_decode.srs import gray2bin
-from pcapng_builder import hit_word, marker_word, srs_payload, write_pcapng
+from p2_decode.testing import hit_word, marker_word, srs_payload, write_pcapng
 
 
 @pytest.fixture

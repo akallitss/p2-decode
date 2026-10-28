@@ -1,4 +1,9 @@
-"""Build small synthetic SRS/VMM3a pcapng files with known contents."""
+"""Build small synthetic SRS/VMM3a pcapng files with known contents.
+
+For tests, here and in the packages that use p2-decode:
+
+    from p2_decode.testing import hit_word, marker_word, srs_payload, write_pcapng
+"""
 
 import struct
 
