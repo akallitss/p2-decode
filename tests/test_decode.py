@@ -130,3 +130,10 @@ def test_nanosecond_timestamps(tmp_path):
     c = p2_decode.decode(p)[1]["capture"]
     assert c["live_time_s"] == pytest.approx(2e-9)
     assert c["frame_counter_changes"] is False
+
+
+def test_decode_to_on_chunk(capture, tmp_path):
+    seen = []
+    meta = p2_decode.decode_to(capture, tmp_path / "s", max_words=1,
+                               on_chunk=lambda c: seen.append(len(c["vmm"])))
+    assert len(seen) == meta["n_chunks"] and sum(seen) == meta["n_hits"]

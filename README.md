@@ -67,6 +67,8 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.5.0** `decode_to(..., on_chunk=f)` calls `f` with each chunk's columns
+  before writing them, so histograms can be built in the same pass.
 - **0.4.0** decodes a capture while dumpcap writes it: `StreamDecoder.poll()`
   returns the hits that arrived since the last poll. The per-packet core is now
   `WordDecoder`, shared with the whole-file path; streaming a real capture in 40

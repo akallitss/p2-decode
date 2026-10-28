@@ -99,12 +99,17 @@ class HitWriter:
 
 
 def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
-              calibration=None, max_words=MAX_WORDS, legacy_word_count=False):
+              calibration=None, max_words=MAX_WORDS, legacy_word_count=False,
+              on_chunk=None):
     """Decode a pcapng straight to a column store, at flat memory cost.
 
     Peak memory is one chunk, not one file, so a 2 GB capture (~3e8 hits, which
     is ~18 GB as a DataFrame) decodes in bounded RAM. Returns the meta dict,
     which is also written to <out_dir>/meta.json.
+
+    on_chunk: called with each chunk's raw columns before they are written, so
+    a caller can accumulate histograms in the same pass instead of reading
+    the whole store back.
     """
     meta = {}
     # In SRS mode the trigger slots are never written by the marker decoder,
@@ -116,6 +121,8 @@ def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
         for cols in iter_chunks(path, data_format, src_ips, max_packets,
                                 calibration, max_words, meta,
                                 legacy_word_count):
+            if on_chunk is not None:
+                on_chunk(cols)
             writer.append(cols)
             del cols
     except BaseException:
