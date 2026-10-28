@@ -67,6 +67,7 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.7.0** `decode_to(..., columns=[...])` stores only those raw columns.
 - **0.6.1** default chunk 500k words instead of 5M: a third of the memory
   (247 vs 734 MB peak for a full reduce of a 141 MB capture) and a little
   faster. Decoded values unchanged.

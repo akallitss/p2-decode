@@ -100,7 +100,7 @@ class HitWriter:
 
 def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
               calibration=None, max_words=MAX_WORDS, legacy_word_count=False,
-              on_chunk=None):
+              on_chunk=None, columns=None):
     """Decode a pcapng straight to a column store, at flat memory cost.
 
     Peak memory is one chunk, not one file, so a 2 GB capture (~3e8 hits, which
@@ -110,13 +110,22 @@ def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
     on_chunk: called with each chunk's raw columns before they are written, so
     a caller can accumulate histograms in the same pass instead of reading
     the whole store back.
+
+    columns: store only these raw columns (default all). A caller that keeps
+    only histograms can store just what it re-reads, instead of writing ~3.4x
+    the capture to disk and deleting it.
     """
     meta = {}
     # In SRS mode the trigger slots are never written by the marker decoder,
     # so they are constant 0 and need not hit the disk (31 % of the store).
     constants = ({"trigger_time": 0, "trigger_counter": 0}
                  if data_format == "SRS" else {})
-    writer = HitWriter(out_dir, constants=constants)
+    stored = list(RAW_COLUMNS) if columns is None else \
+        [c for c in RAW_COLUMNS if c in set(columns)]
+    if columns is not None and len(stored) != len(set(columns)):
+        raise ValueError(f"unknown columns: {sorted(set(columns) - set(RAW_COLUMNS))}")
+    constants = {k: v for k, v in constants.items() if k in stored}
+    writer = HitWriter(out_dir, columns=stored, constants=constants)
     try:
         for cols in iter_chunks(path, data_format, src_ips, max_packets,
                                 calibration, max_words, meta,
@@ -129,7 +138,7 @@ def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
         writer.close()
         raise
     meta["source"] = os.path.abspath(path)
-    meta["columns"] = list(RAW_COLUMNS)
+    meta["columns"] = stored
     meta["derived_columns"] = list(DERIVED_COLUMNS)
     meta["constant_columns"] = {k: int(v) for k, v in constants.items()}
     meta["schema_version"] = SCHEMA_VERSION

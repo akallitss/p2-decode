@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import pytest
 
@@ -137,3 +138,15 @@ def test_decode_to_on_chunk(capture, tmp_path):
     meta = p2_decode.decode_to(capture, tmp_path / "s", max_words=1,
                                on_chunk=lambda c: seen.append(len(c["vmm"])))
     assert len(seen) == meta["n_chunks"] and sum(seen) == meta["n_hits"]
+
+
+def test_decode_to_column_subset(capture, tmp_path):
+    meta = p2_decode.decode_to(capture, tmp_path / "s", columns=["vmm", "time"])
+    assert sorted(f for f in os.listdir(tmp_path / "s") if f.endswith(".npy")) == \
+        ["time.npy", "vmm.npy"]
+    cols, m = p2_decode.load_hits(tmp_path / "s")
+    whole, _ = p2_decode.decode(capture)
+    assert set(cols) == {"vmm", "time"} and m["columns"] == ["vmm", "time"]
+    assert np.array_equal(cols["vmm"], whole["vmm"].to_numpy())
+    with pytest.raises(ValueError, match="unknown columns"):
+        p2_decode.decode_to(capture, tmp_path / "t", columns=["vmm", "nope"])
