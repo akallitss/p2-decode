@@ -151,7 +151,8 @@ class UdpStreamDecoder:
             d = self.per_fec.setdefault(str(int(f)), {"packets": 0, "udp_payload_bytes": 0})
             d["packets"] += int(sel.sum())
             d["udp_payload_bytes"] += int(plen[sel].sum())
-        parts = list(self.words.decode(u8, pstart, plen, frame_counter, fec_id))
+        parts = list(self.words.decode(u8, pstart, plen, frame_counter, fec_id,
+                                       pkt_time_ns=t_ns))
         if not parts:
             return None, info
         cols = {k: (np.concatenate([p[k] for p in parts]) if len(parts) > 1

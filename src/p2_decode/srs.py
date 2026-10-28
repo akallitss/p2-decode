@@ -256,8 +256,14 @@ class WordDecoder:
         # a trailing partial word (never seen in DAQ data) is ignored
         return (plen - 16) // 6
 
-    def decode(self, u8, pstart, plen, frame_counter, fec_id):
-        """Yield raw hit columns for these packets, in chunks of <= max_words."""
+    def decode(self, u8, pstart, plen, frame_counter, fec_id, pkt_time_ns=None):
+        """Yield raw hit columns for these packets, in chunks of <= max_words.
+
+        pkt_time_ns: capture (or receive) time of each packet; if given, every
+        chunk also carries "pkt_time_ns" per hit (float64, ns since the epoch),
+        the wall-clock time of the packet the hit came in. Not a stored column:
+        stores and decode() leave it out; monitors use it for rate vs time.
+        """
         nwords = self.n_words_of(plen)
         total = int(nwords.sum())
         self.n_words += total
@@ -352,6 +358,8 @@ class WordDecoder:
                 "srs_timestamp": srs_ts,
                 "trigger_time": trg_time,
                 "trigger_counter": trg_ctr.astype(np.uint16),
+                **({"pkt_time_ns": np.asarray(pkt_time_ns[lo:hi], np.float64)
+                    [pkt_of_word[hit_pos]]} if pkt_time_ns is not None else {}),
             }
 
     def meta(self, n_packets, src_ips):
@@ -423,7 +431,7 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         meta.update(_empty_meta(n_packets, src_ips, data_format))
         return
 
-    yield from wd.decode(u8, pstart, plen, frame_counter, fec_id)
+    yield from wd.decode(u8, pstart, plen, frame_counter, fec_id, pkt_time_ns=t_ns)
 
     meta.update(wd.meta(n_packets, src_ips))
     for fec, d in capture["per_fec"].items():

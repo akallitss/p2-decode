@@ -150,3 +150,14 @@ def test_decode_to_column_subset(capture, tmp_path):
     assert np.array_equal(cols["vmm"], whole["vmm"].to_numpy())
     with pytest.raises(ValueError, match="unknown columns"):
         p2_decode.decode_to(capture, tmp_path / "t", columns=["vmm", "nope"])
+
+
+def test_chunks_carry_packet_time_not_stored(capture, tmp_path):
+    # builder: packet i stamped i ticks of 1 us; 2 packets with 2 hits each
+    chunks = list(p2_decode.iter_chunks(capture))
+    t = np.concatenate([c["pkt_time_ns"] for c in chunks])
+    assert t.tolist() == [0.0, 0.0, 1000.0, 1000.0]
+    p2_decode.decode_to(capture, tmp_path / "s")
+    assert not os.path.exists(tmp_path / "s" / "pkt_time_ns.npy")
+    hits, _ = p2_decode.decode(capture)
+    assert "pkt_time_ns" not in hits.columns

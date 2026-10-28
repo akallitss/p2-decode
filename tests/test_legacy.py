@@ -39,6 +39,10 @@ def test_identical_to_legacy(legacy, path, data_format):
                                      legacy_word_count=True)
     assert new_meta.pop("legacy_word_count") is True
     new_meta.pop("capture")              # added in 0.3; the legacy decoder has none
+    # how many chunks the decode took depends on MAX_WORDS (500k since 0.6.1,
+    # the legacy decoder used 5M); the hits do not, as the loop below checks
+    new_meta.pop("n_chunks")
+    ref_meta.pop("n_chunks")
     assert len(new) == len(ref) > 0
     assert list(new.columns) == list(ref.columns)
     for c in ref.columns:

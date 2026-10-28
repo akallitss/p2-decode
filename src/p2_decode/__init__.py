@@ -12,7 +12,7 @@ Layers, bottom up:
     udp          the FEC's UDP stream itself, no file: UdpStreamDecoder
 """
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 from .api import decode                                         # noqa: E402
 from .calibration import derive, load_calibration               # noqa: E402

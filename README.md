@@ -67,6 +67,9 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.8.1** decoded chunks (iter_chunks, StreamDecoder, UdpStreamDecoder) carry
+  `pkt_time_ns`, the packet's capture/receive time per hit, for rate-vs-time;
+  not a stored column. Legacy test ignores `n_chunks` (depends on MAX_WORDS).
 - **0.8.0** `UdpStreamDecoder("192.168.1.16:6006")`: decode the FEC's UDP stream
   directly, no file. A plain UDP socket on the FEC's destination port: the
   kernel gives every datagram to dumpcap's capture and to this socket, so the
