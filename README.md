@@ -67,6 +67,9 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.6.1** default chunk 500k words instead of 5M: a third of the memory
+  (247 vs 734 MB peak for a full reduce of a 141 MB capture) and a little
+  faster. Decoded values unchanged.
 - **0.6.0** `StreamDecoder.skip_to_tail(keep_bytes)`: a monitor that falls
   behind can drop its backlog, walking block headers only; skipped bytes and
   packets are reported in `meta()["skipped"]`.

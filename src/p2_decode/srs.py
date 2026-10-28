@@ -20,9 +20,12 @@ _VM3 = (ord("V") << 16) | (ord("M") << 8) | ord("3")
 # marker state is keyed by (fec_id, vmm_id) with fec 0-15 and vmm 0-31
 _NKEYS = 16 * 32
 
-# words decoded per chunk; ~6 B raw + ~24 B of decoded columns each, so 5e6
-# keeps a chunk's transient footprint around 150 MB
-MAX_WORDS = 5_000_000
+# words decoded per chunk. Measured on a 141 MB beam capture (2026-10-28):
+# peak anonymous memory of a full reduce is ~147 B per word of chunk on top of
+# a ~200 MB floor -- 734 MB at 5e6, 274 MB at 1e6, 247 MB at 5e5 -- and smaller
+# chunks are also slightly faster (31 -> 39 MB/s), as their arrays stay in
+# cache. Results never depend on the value (tests/test_decode.py).
+MAX_WORDS = 500_000
 
 
 def detect_fec_ips(path, n_probe=PROBE_PACKETS):
