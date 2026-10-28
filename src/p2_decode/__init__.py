@@ -11,7 +11,7 @@ Layers, bottom up:
     follow       a capture still being written: PcapngFollower, StreamDecoder
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 
 from .api import decode                                         # noqa: E402
 from .calibration import derive, load_calibration               # noqa: E402

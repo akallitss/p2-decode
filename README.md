@@ -67,6 +67,9 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.6.0** `StreamDecoder.skip_to_tail(keep_bytes)`: a monitor that falls
+  behind can drop its backlog, walking block headers only; skipped bytes and
+  packets are reported in `meta()["skipped"]`.
 - **0.5.0** `decode_to(..., on_chunk=f)` calls `f` with each chunk's columns
   before writing them, so histograms can be built in the same pass.
 - **0.4.0** decodes a capture while dumpcap writes it: `StreamDecoder.poll()`

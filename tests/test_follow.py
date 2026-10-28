@@ -90,3 +90,31 @@ def test_real_capture_stream(path, tmp_path, data_format):
     cols, meta = _stream(path, tmp_path / "grow.pcapng", 40, seed=1,
                          data_format=data_format)
     _same(path, cols, meta, data_format=data_format)
+
+
+def test_skip_to_tail(capture, tmp_path):
+    raw = open(capture, "rb").read()
+    dst = tmp_path / "s.pcapng"
+    dst.write_bytes(raw)
+    sd = p2_decode.StreamDecoder(dst)
+    assert sd.follower.backlog() == len(raw)
+    skipped = sd.skip_to_tail(keep_bytes=300)
+    assert skipped > 0 and sd.follower.backlog() <= 300 + 200      # lands on a block edge
+    cols, _ = sd.poll()
+    whole, _ = p2_decode.decode(capture)
+    n = len(cols["vmm"])
+    assert 0 < n < len(whole)
+    # what is read after the jump is the tail of the file, hit for hit
+    for c in ("vmm", "ch", "adc", "bcid", "tdc", "fec"):
+        assert np.array_equal(cols[c], whole[c].to_numpy()[-n:]), c
+    m = sd.meta()
+    assert m["skipped"]["packets"] + m["n_packets"] == 40
+    assert m["capture"]["t_first_ns"] is not None                 # IDB units kept
+
+
+def test_skip_nothing_when_caught_up(capture, tmp_path):
+    dst = tmp_path / "s.pcapng"
+    dst.write_bytes(open(capture, "rb").read())
+    sd = p2_decode.StreamDecoder(dst)
+    sd.poll()
+    assert sd.skip_to_tail(keep_bytes=0) == 0

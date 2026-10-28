@@ -41,6 +41,59 @@ class PcapngFollower:
         self.ts_units = []              # ns per tick, per interface of the section
         self.linktypes = []
         self.n_packets = 0
+        self.skipped_bytes = 0
+        self.skipped_packets = 0
+
+    def backlog(self):
+        """Bytes written to the file but not read yet."""
+        try:
+            return max(0, os.path.getsize(self.path) - self.pos)
+        except OSError:
+            return 0
+
+    def skip_to_tail(self, keep_bytes):
+        """Jump ahead so at most ~keep_bytes remain unread. Returns bytes skipped.
+
+        Walks block headers only (8 bytes per block), so it costs a seek per
+        block, not a read of the data. Section and interface blocks met on the
+        way are still parsed, so timestamps and byte order stay right after the
+        jump. Packets skipped are counted in skipped_packets / skipped_bytes.
+        """
+        size = os.path.getsize(self.path)
+        target = size - keep_bytes
+        if target <= self.pos:
+            return 0
+        start = self.pos
+        with open(self.path, "rb") as f:
+            p = self.pos
+            while p + 12 <= target:
+                f.seek(p)
+                head = f.read(12)
+                if len(head) < 12:
+                    break
+                btype = struct.unpack_from("<I", head, 0)[0]
+                if btype == _BT_SHB:
+                    bom = struct.unpack_from("<I", head, 8)[0]
+                    self.endian = "<" if bom == _BOM else ">"
+                btype, blen = struct.unpack_from(self.endian + "II", head, 0)
+                if blen < 12 or blen % 4:
+                    raise ValueError(f"{self.path}: corrupt block at byte {p}")
+                if p + blen > size:
+                    break
+                if btype in (_BT_SHB, _BT_IDB):
+                    f.seek(p)
+                    block = f.read(blen)
+                    if btype == _BT_SHB:
+                        self.ts_units, self.linktypes = [], []
+                    else:
+                        self.linktypes.append(struct.unpack_from(self.endian + "H", block, 8)[0])
+                        self.ts_units.append(_ts_unit_ns(_tsresol(block, 0, blen, self.endian)))
+                elif btype in (_BT_EPB, _BT_SPB):
+                    self.skipped_packets += 1
+                p += blen
+        self.pos = p
+        self.skipped_bytes += p - start
+        return p - start
 
     def read(self):
         """(u8, off, caplen, t_ns) of the complete packets appended since last call."""
@@ -126,6 +179,15 @@ class StreamDecoder:
     def path(self):
         return self.follower.path
 
+    def skip_to_tail(self, keep_bytes):
+        """Drop the backlog beyond keep_bytes (see PcapngFollower.skip_to_tail).
+
+        For monitoring under a flood: rates stay right over what is read, but
+        hits are missing, and the first hits after the jump may carry the
+        marker values from before it until their VMM's next marker.
+        """
+        return self.follower.skip_to_tail(keep_bytes)
+
     def poll(self):
         """(cols, info) for what arrived since the last poll; cols is None if no hit.
 
@@ -183,4 +245,7 @@ class StreamDecoder:
                         "per_fec": per_fec}
         if self.legacy_word_count:
             m["legacy_word_count"] = True
+        if self.follower.skipped_bytes:
+            m["skipped"] = {"bytes": self.follower.skipped_bytes,
+                            "packets": self.follower.skipped_packets}
         return m
