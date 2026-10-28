@@ -67,6 +67,14 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.8.0** `UdpStreamDecoder("192.168.1.16:6006")`: decode the FEC's UDP stream
+  directly, no file. A plain UDP socket on the FEC's destination port: the
+  kernel gives every datagram to dumpcap's capture and to this socket, so the
+  recording is never affected. Datagrams this reader is too slow for are
+  dropped by the kernel for this socket only and counted (SO_RXQ_OVFL), so
+  `fraction_received` scales rates to the full stream. Kernel receive
+  timestamps (SO_TIMESTAMPNS) give the live time. Same WordDecoder as the
+  file paths: identical hits (tests/test_udp.py). Linux only, no privileges.
 - **0.7.0** `decode_to(..., columns=[...])` stores only those raw columns.
 - **0.6.1** default chunk 500k words instead of 5M: a third of the memory
   (247 vs 734 MB peak for a full reduce of a 141 MB capture) and a little
