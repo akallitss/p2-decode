@@ -38,6 +38,7 @@ def test_identical_to_legacy(legacy, path, data_format):
     new, new_meta = p2_decode.decode(path, data_format=data_format,
                                      legacy_word_count=True)
     assert new_meta.pop("legacy_word_count") is True
+    new_meta.pop("capture")              # added in 0.3; the legacy decoder has none
     assert len(new) == len(ref) > 0
     assert list(new.columns) == list(ref.columns)
     for c in ref.columns:

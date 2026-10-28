@@ -23,8 +23,32 @@ _BOM = 0x1A2B3C4D
 _LINKTYPE_ETHERNET = 1
 
 
-def walk_blocks(path, max_packets=None):
-    """Return (u8, pkt_off, pkt_caplen, linktypes).
+def _ts_unit_ns(tsresol):
+    """Nanoseconds per timestamp tick for a pcapng if_tsresol byte."""
+    if tsresol & 0x80:
+        return 1e9 / (1 << (tsresol & 0x7F))
+    return 10.0 ** (9 - tsresol)
+
+
+def _idb_tsresol(u8, pos, blen, endian):
+    """if_tsresol of the IDB at `pos` (default 6, i.e. microseconds)."""
+    o, end = pos + 16, pos + blen - 4
+    while o + 4 <= end:
+        code, ln = struct.unpack_from(endian + "HH", bytes(u8[o:o + 4]))
+        if code == 0:
+            break
+        if code == 9 and ln >= 1:
+            return int(u8[o + 4])
+        o += 4 + ln + (-ln % 4)
+    return 6
+
+
+def walk_blocks(path, max_packets=None, times=False):
+    """Return (u8, pkt_off, pkt_caplen, linktypes), plus pkt_time_ns if `times`.
+
+    pkt_time_ns is each packet's capture time in ns since the Unix epoch,
+    float64 (resolution ~0.25 us at today's epoch), NaN for Simple Packet Blocks,
+    which carry none. The interface's if_tsresol is honoured.
 
     Walks the pcapng block chain to find every Enhanced/Simple Packet Block.
     Only block headers are read in Python -- roughly one iteration per packet,
@@ -64,6 +88,8 @@ def walk_blocks(path, max_packets=None):
     pkt_off = []
     pkt_len = []
     linktypes = []
+    pkt_time = []
+    ts_units = []            # ns per tick, per interface, in IDB order
 
     n_words = size // 4
     slab_words = _SLAB_WORDS
@@ -96,16 +122,24 @@ def walk_blocks(path, max_packets=None):
                 break
             pkt_off.append(pos + 28)
             pkt_len.append(int(slab[i + 5]))
+            if times:
+                iface = int(slab[i + 2])
+                unit = ts_units[iface] if iface < len(ts_units) else 1e3
+                pkt_time.append(((int(slab[i + 3]) << 32) | int(slab[i + 4])) * unit)
         elif btype == _BT_SPB:
             # Simple Packet Block has no caplen; the block length bounds it.
             if blen < 16 or i + 2 >= avail:
                 break
             pkt_off.append(pos + 12)
             pkt_len.append(min(int(slab[i + 2]), blen - 16))
+            if times:
+                pkt_time.append(np.nan)
         elif btype == _BT_IDB:
             if blen < 20 or i + 2 >= avail:
                 break
             linktypes.append(int(slab[i + 2]) & 0xFFFF)
+            if times:
+                ts_units.append(_ts_unit_ns(_idb_tsresol(u8, pos, blen, endian)))
         elif btype == _BT_SHB:
             if blen < 28 or i + 2 >= avail:
                 break
@@ -116,20 +150,26 @@ def walk_blocks(path, max_packets=None):
             break
 
     del slab
-    return (u8,
-            np.asarray(pkt_off, dtype=np.int64),
-            np.asarray(pkt_len, dtype=np.int64),
-            linktypes)
+    out = (u8,
+           np.asarray(pkt_off, dtype=np.int64),
+           np.asarray(pkt_len, dtype=np.int64),
+           linktypes)
+    if times:
+        out += (np.asarray(pkt_time, dtype=np.float64),)
+    return out
 
 
-def read_packets(path, max_packets=None):
+def read_packets(path, max_packets=None, times=False):
     """Locate every UDP payload in a pcapng, vectorised over packets.
 
-    Returns (u8, payload_start, payload_len, src_ip_u32, n_packets).
+    Returns (u8, payload_start, payload_len, src_ip_u32, n_packets), plus the
+    UDP packets' capture times in ns (see walk_blocks) if `times`.
     `n_packets` counts every captured packet, matching the reference parser's
     `pkt_count` (which drives --max-packets), not just the UDP ones.
     """
-    u8, off, caplen, linktypes = walk_blocks(path, max_packets=max_packets)
+    walked = walk_blocks(path, max_packets=max_packets, times=times)
+    u8, off, caplen, linktypes = walked[:4]
+    t_ns = walked[4] if times else None
 
     if linktypes and any(lt != _LINKTYPE_ETHERNET for lt in linktypes):
         raise ValueError(
@@ -141,11 +181,14 @@ def read_packets(path, max_packets=None):
     if max_packets is not None and n_packets > max_packets:
         off = off[:max_packets]
         caplen = caplen[:max_packets]
+        if times:
+            t_ns = t_ns[:max_packets]
         n_packets = len(off)
 
     if n_packets == 0:
         empty = np.zeros(0, dtype=np.int64)
-        return u8, empty, empty, np.zeros(0, dtype=np.uint32), 0
+        out = (u8, empty, empty, np.zeros(0, dtype=np.uint32), 0)
+        return out + ((np.zeros(0),) if times else ())
 
     # --- Ethernet, with any number of VLAN tags (802.1Q / 802.1ad) ---
     ok = caplen >= 14
@@ -196,7 +239,8 @@ def read_packets(path, max_packets=None):
         plen[idx] = np.minimum(np.maximum(udp_len - 8, 0), avail)
     keep = plen > 0
 
-    return u8, pstart[keep], plen[keep], src[keep], n_packets
+    out = (u8, pstart[keep], plen[keep], src[keep], n_packets)
+    return out + ((t_ns[keep],) if times else ())
 
 
 def ip_str(v):

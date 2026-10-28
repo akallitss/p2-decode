@@ -110,3 +110,23 @@ def test_not_a_pcapng(tmp_path):
     p.write_bytes(b"\xd4\xc3\xb2\xa1" + b"\x00" * 20)
     with pytest.raises(ValueError, match="classic .pcap"):
         p2_decode.decode(p)
+
+
+def test_capture_meta(capture):
+    # builder: IDB without if_tsresol (microseconds), packet i stamped i us
+    _, meta = p2_decode.decode(capture)
+    c = meta["capture"]
+    assert c["t_first_ns"] == 0.0 and c["t_last_ns"] == 1000.0
+    assert c["live_time_s"] == pytest.approx(1e-6)
+    assert c["frame_counter_changes"] is True          # frames 7 and 8
+    assert c["per_fec"] == {"1": {"packets": 2, "udp_payload_bytes": 2 * (16 + 18),
+                                  "hits": 4, "markers": 2}}
+    assert c["udp_payload_bytes"] == 68
+
+
+def test_nanosecond_timestamps(tmp_path):
+    p = write_pcapng(tmp_path / "ns.pcapng",
+                     [srs_payload(0, 2, [hit_word(0, 1, 1, 1, 1)])] * 3, tsresol=9)
+    c = p2_decode.decode(p)[1]["capture"]
+    assert c["live_time_s"] == pytest.approx(2e-9)
+    assert c["frame_counter_changes"] is False

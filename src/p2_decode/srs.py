@@ -213,7 +213,8 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     if meta is None:
         meta = {}
 
-    u8, pstart, plen, src, n_packets = read_packets(path, max_packets=max_packets)
+    u8, pstart, plen, src, n_packets, t_ns = read_packets(
+        path, max_packets=max_packets, times=True)
 
     if src_ips is None:
         found = detect_fec_ips(path)
@@ -227,13 +228,13 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     # --- select VM3 packets from the wanted FEC(s) ---
     min_len = 23 if legacy_word_count else 22    # header + at least one word
     m = (plen >= min_len) & np.isin(src, want)
-    pstart, plen = pstart[m], plen[m]
+    pstart, plen, t_ns = pstart[m], plen[m], t_ns[m]
     if len(pstart):
         magic = (u8[pstart + 4].astype(np.uint32) << 16 |
                  u8[pstart + 5].astype(np.uint32) << 8 |
                  u8[pstart + 6].astype(np.uint32))
         m2 = magic == _VM3
-        pstart, plen = pstart[m2], plen[m2]
+        pstart, plen, t_ns = pstart[m2], plen[m2], t_ns[m2]
 
     if len(pstart) == 0:
         meta.update(_empty_meta(n_packets, src_ips, data_format))
@@ -246,6 +247,7 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
                      u8[pstart + 3].astype(np.uint32))
     # reference: (u32_at_byte4 >> 4) & 0x0F, i.e. the upper nibble of byte 7
     fec_id = ((u8[pstart + 7].astype(np.uint32) >> 4) & 0x0F).astype(np.uint8)
+    capture = _capture_meta(fec_id, plen, t_ns, frame_counter)
 
     # --- flatten every 6-byte data word, in file order, from byte 16 ---
     if legacy_word_count:
@@ -272,6 +274,8 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         bounds.append(min(max(nxt, bounds[-1] + 1), len(pstart)))
 
     carry = np.zeros((3, _NKEYS), dtype=np.uint64)
+    hits_per_fec = np.zeros(16, dtype=np.int64)
+    markers_per_fec = np.zeros(16, dtype=np.int64)
     n_vm3 = 0
     n_markers = 0
     n_hits = 0
@@ -309,6 +313,7 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         n_markers += len(mrk_pos)
 
         c_fec = fec_id[lo:hi]
+        markers_per_fec += np.bincount(c_fec[pkt_of_word[mrk_pos]], minlength=16)
         h1 = d1[hit_pos]
         h2 = d2[hit_pos]
         hit_fec = c_fec[pkt_of_word[hit_pos]]
@@ -330,6 +335,7 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         offset = np.where(raw_off < 16, raw_off, raw_off - 32).astype(np.int8)
 
         n_hits += len(hit_pos)
+        hits_per_fec += np.bincount(hit_fec, minlength=16)
         n_invalid += int((offset < np.int8(-1)).sum())
         if len(offset):
             off_seen.update(np.unique(offset).tolist())
@@ -368,8 +374,39 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         "n_invalid_offset": int(n_invalid),
         "offset_constant": bool(len(off_seen) == 1),
     })
+    for fec, d in capture["per_fec"].items():
+        d["hits"] = int(hits_per_fec[int(fec)])
+        d["markers"] = int(markers_per_fec[int(fec)])
+    meta["capture"] = capture
     if legacy_word_count:
         meta["legacy_word_count"] = True
+
+
+def _capture_meta(fec_id, plen, t_ns, frame_counter):
+    """Live time and data volume of the selected VM3 packets.
+
+    Times are pcapng capture times (ns since the Unix epoch), so live_time_s is
+    the wall-clock span from the first to the last VM3 packet. frame_counter
+    is reported as usable only if it changes: the ALINX firmware sends one
+    constant value, so lost frames cannot be counted from it.
+    """
+    ok = np.isfinite(t_ns)
+    t0 = float(t_ns[ok].min()) if ok.any() else None
+    t1 = float(t_ns[ok].max()) if ok.any() else None
+    per_fec = {}
+    for f in np.unique(fec_id):
+        sel = fec_id == f
+        per_fec[str(int(f))] = {"packets": int(sel.sum()),
+                                "udp_payload_bytes": int(plen[sel].sum())}
+    return {
+        "t_first_ns": t0,
+        "t_last_ns": t1,
+        "live_time_s": (t1 - t0) / 1e9 if t0 is not None else None,
+        "udp_payload_bytes": int(plen.sum()),
+        "frame_counter_changes": bool(len(frame_counter) > 1 and
+                                      (frame_counter != frame_counter[0]).any()),
+        "per_fec": per_fec,
+    }
 
 
 def _empty_meta(n_packets, src_ips, data_format):

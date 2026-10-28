@@ -9,7 +9,7 @@ pads here — that is `p2-mapping`. Part of the P2 readout software split
 
 ```bash
 pip install -e /path/to/p2-decode          # development checkout
-pip install "p2-decode @ git+<repo-url>@v0.2.0"   # pinned, for production
+pip install "p2-decode @ git+<repo-url>@v0.3.0"   # pinned, for production
 ```
 
 Needs only numpy and pandas.
@@ -61,6 +61,12 @@ below) and separately checks what the default adds.
 
 ## Versions
 
+- **0.3.0** adds `meta["capture"]`, for monitoring: `t_first_ns` / `t_last_ns`
+  (pcapng capture times, ns since the epoch, honouring `if_tsresol`),
+  `live_time_s`, `udp_payload_bytes`, and per FEC `packets`,
+  `udp_payload_bytes`, `hits`, `markers`. `frame_counter_changes` says whether
+  the SRS frame counter can count lost frames: the ALINX firmware sends a
+  constant, so it cannot. Hits are unchanged.
 - **0.2.0** reads every 6-byte word after the 16-byte SRS header, as vmm-sdat's
   `ParserSRS` does. The earlier Python parsers (`vmm_pcapng_qa.py`,
   `vmm_decode.py`, 0.1.0) read `range(0, len - 22, 6)` and skipped the last

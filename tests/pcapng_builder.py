@@ -44,10 +44,16 @@ def _block(btype, body):
     return struct.pack("<II", btype, n) + body + struct.pack("<I", n)
 
 
-def write_pcapng(path, payloads, src_ip="10.0.0.2"):
-    """Write one Ethernet/IPv4/UDP packet per payload."""
+def write_pcapng(path, payloads, src_ip="10.0.0.2", tsresol=None):
+    """Write one Ethernet/IPv4/UDP packet per payload, packet i stamped i ticks.
+
+    tsresol: the IDB's if_tsresol option (None = absent = microseconds).
+    """
+    idb = struct.pack("<HHI", 1, 0, 0)
+    if tsresol is not None:
+        idb += struct.pack("<HHB3x", 9, 1, tsresol) + struct.pack("<HH", 0, 0)
     out = [_block(0x0A0D0D0A, struct.pack("<IHHq", 0x1A2B3C4D, 1, 0, -1)),
-           _block(0x00000001, struct.pack("<HHI", 1, 0, 0))]
+           _block(0x00000001, idb)]
     for i, p in enumerate(payloads):
         frame = _udp_frame(p, src_ip)
         out.append(_block(0x00000006, struct.pack("<IIIII", 0, 0, i,
