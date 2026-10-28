@@ -9,7 +9,7 @@ pads here — that is `p2-mapping`. Part of the P2 readout software split
 
 ```bash
 pip install -e /path/to/p2-decode          # development checkout
-pip install "p2-decode @ git+<repo-url>@v0.1.0"   # pinned, for production
+pip install "p2-decode @ git+<repo-url>@v0.2.0"   # pinned, for production
 ```
 
 Needs only numpy and pandas.
@@ -56,9 +56,18 @@ P2_DECODE_CAPTURES=a.pcapng:b.pcapng pytest tests/test_legacy.py
 ```
 
 `test_legacy.py` checks bit-identity, column by column, with the original
-`P2_basket_online_analysis/vmm_decode.py` in SRS and TRG modes.
+`P2_basket_online_analysis/vmm_decode.py` in SRS and TRG modes. It runs that comparison with `legacy_word_count=True` (see
+below) and separately checks what the default adds.
 
-## Origin
+## Versions
 
-v0.1.0 is `vmm_decode.py` (P2_basket_online_analysis commit 812c3b9) split into
-modules with no change to any decoded value.
+- **0.2.0** reads every 6-byte word after the 16-byte SRS header, as vmm-sdat's
+  `ParserSRS` does. The earlier Python parsers (`vmm_pcapng_qa.py`,
+  `vmm_decode.py`, 0.1.0) read `range(0, len - 22, 6)` and skipped the last
+  word of every packet. On four real captures this adds 0.07 % hits, leaves
+  every previously decoded hit's raw fields identical, and corrects the
+  `srs_timestamp` of about 0.08 % of hits that had been given a stale marker.
+  `legacy_word_count=True` (CLI `--legacy-word-count`) reproduces the old
+  output, for comparison with stores made by the old parsers.
+- **0.1.0** is `vmm_decode.py` (P2_basket_online_analysis commit 812c3b9)
+  split into modules with no change to any decoded value.

@@ -99,7 +99,7 @@ class HitWriter:
 
 
 def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
-              calibration=None, max_words=MAX_WORDS):
+              calibration=None, max_words=MAX_WORDS, legacy_word_count=False):
     """Decode a pcapng straight to a column store, at flat memory cost.
 
     Peak memory is one chunk, not one file, so a 2 GB capture (~3e8 hits, which
@@ -114,7 +114,8 @@ def decode_to(path, out_dir, data_format="SRS", src_ips=None, max_packets=None,
     writer = HitWriter(out_dir, constants=constants)
     try:
         for cols in iter_chunks(path, data_format, src_ips, max_packets,
-                                calibration, max_words, meta):
+                                calibration, max_words, meta,
+                                legacy_word_count):
             writer.append(cols)
             del cols
     except BaseException:

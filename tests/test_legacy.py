@@ -1,5 +1,8 @@
 """Bit-identity against the original P2_basket_online_analysis/vmm_decode.py.
 
+The original skips the last word of every packet, so the comparison runs with
+legacy_word_count=True; test_full_word_count checks what the default adds.
+
 Runs only when both are available:
     P2_DECODE_LEGACY   path to the legacy vmm_decode.py
     P2_DECODE_CAPTURES colon-separated list of real .pcapng captures
@@ -32,7 +35,9 @@ def legacy():
 @pytest.mark.parametrize("path", CAPTURES, ids=os.path.basename)
 def test_identical_to_legacy(legacy, path, data_format):
     ref, ref_meta = legacy.decode(path, data_format=data_format)
-    new, new_meta = p2_decode.decode(path, data_format=data_format)
+    new, new_meta = p2_decode.decode(path, data_format=data_format,
+                                     legacy_word_count=True)
+    assert new_meta.pop("legacy_word_count") is True
     assert len(new) == len(ref) > 0
     assert list(new.columns) == list(ref.columns)
     for c in ref.columns:
@@ -40,3 +45,14 @@ def test_identical_to_legacy(legacy, path, data_format):
         assert a.dtype == b.dtype, c
         assert np.array_equal(a, b), c
     assert new_meta == ref_meta
+
+
+@pytest.mark.parametrize("path", CAPTURES, ids=os.path.basename)
+def test_full_word_count(legacy, path):
+    _, ref_meta = legacy.decode(path)
+    _, meta = p2_decode.decode(path)
+    # exactly one more word per VM3 packet: every DAQ frame is 16 + 6*N bytes
+    n_vm3_frames = meta["n_words"] - ref_meta["n_words"]
+    assert 0 < n_vm3_frames <= meta["n_packets"]
+    assert meta["n_hits"] + meta["n_markers"] == meta["n_words"]
+    assert meta["n_hits"] >= ref_meta["n_hits"]

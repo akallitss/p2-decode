@@ -6,23 +6,14 @@ from p2_decode.srs import gray2bin
 from pcapng_builder import hit_word, marker_word, srs_payload, write_pcapng
 
 
-def _pad():
-    # The decoder does not read the last word of a packet (see
-    # test_last_word_of_packet_is_not_read); tests that check other things put
-    # a throwaway marker there.
-    return marker_word(31, 0)
-
-
 @pytest.fixture
 def capture(tmp_path):
     words1 = [marker_word(2, 1000),
               hit_word(2, 10, 300, 1234, 77),
-              hit_word(3, 63, 1023, 4095, 255, ot=1),
-              _pad()]
+              hit_word(3, 63, 1023, 4095, 255, ot=1)]
     words2 = [hit_word(2, 11, 5, 0, 0, offset=1),
               marker_word(2, 2000),
-              hit_word(2, 12, 6, 1, 1),
-              _pad()]
+              hit_word(2, 12, 6, 1, 1)]
     return write_pcapng(tmp_path / "c.pcapng",
                         [srs_payload(7, 1, words1), srs_payload(8, 1, words2)])
 
@@ -58,14 +49,32 @@ def test_derived_columns(capture):
     assert hits.hit_valid.all()
 
 
-def test_last_word_of_packet_is_not_read(tmp_path):
-    # v0.1 reproduces vmm_decode.py exactly, including that it reads
-    # range(0, len - 22, 6): a payload of 16 + 6*N bytes yields N-1 words.
-    p = write_pcapng(tmp_path / "l.pcapng", [srs_payload(
+def _two_hit_packet(tmp_path):
+    return write_pcapng(tmp_path / "l.pcapng", [srs_payload(
         1, 1, [hit_word(0, 1, 1, 1, 1), hit_word(0, 2, 2, 2, 2)])])
-    hits, meta = p2_decode.decode(p)
-    assert meta["n_words"] == 1
+
+
+def test_every_word_of_packet_is_read(tmp_path):
+    # a payload of 16 + 6*N bytes holds N words, as in vmm-sdat ParserSRS
+    hits, meta = p2_decode.decode(_two_hit_packet(tmp_path))
+    assert meta["n_words"] == 2
+    assert hits.ch.tolist() == [1, 2]
+    assert "legacy_word_count" not in meta
+
+
+def test_legacy_word_count_skips_last_word(tmp_path):
+    # parsers before 0.2 read range(0, len - 22, 6) and so yield N-1 words
+    hits, meta = p2_decode.decode(_two_hit_packet(tmp_path),
+                                  legacy_word_count=True)
+    assert meta["n_words"] == 1 and meta["legacy_word_count"] is True
     assert hits.ch.tolist() == [1]
+
+
+def test_single_word_packet(tmp_path):
+    p = write_pcapng(tmp_path / "s.pcapng",
+                     [srs_payload(1, 1, [hit_word(0, 5, 1, 1, 1)])])
+    assert p2_decode.decode(p)[0].ch.tolist() == [5]
+    assert len(p2_decode.decode(p, legacy_word_count=True)[0]) == 0
 
 
 def test_chunk_invariance(capture):

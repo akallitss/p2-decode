@@ -189,7 +189,8 @@ def gray2bin(arr):
 # ---------------------------------------------------------------------------
 
 def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
-                calibration=None, max_words=MAX_WORDS, meta=None):
+                calibration=None, max_words=MAX_WORDS, meta=None,
+                legacy_word_count=False):
     """Yield the raw hit columns (RAW_COLUMNS) one chunk at a time.
 
     This is the streaming core shared by `decode` (which concatenates) and
@@ -199,6 +200,13 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     `calibration` is accepted for signature compatibility and unused here: it
     only enters the derived columns (see `derive`).
     `meta`, if given, is a dict filled in once the generator is exhausted.
+
+    Every 6-byte word after the 16-byte SRS header is decoded, as vmm-sdat's
+    ParserSRS does. `legacy_word_count=True` reproduces the earlier Python
+    parsers (vmm_pcapng_qa.py, vmm_decode.py, p2-decode 0.1), which read
+    range(0, len - 22, 6) and so skipped the last word of every packet --
+    1 word in 1492 for a full 8968-byte frame. Use it only to compare with
+    stores made by those parsers.
     """
     if data_format not in ("SRS", "TRG"):
         raise ValueError(f"data_format must be 'SRS' or 'TRG', got {data_format!r}")
@@ -217,7 +225,8 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     want = np.array([ip_u32(s) for s in sorted(src_ips)], dtype=np.uint32)
 
     # --- select VM3 packets from the wanted FEC(s) ---
-    m = (plen > 22) & np.isin(src, want)
+    min_len = 23 if legacy_word_count else 22    # header + at least one word
+    m = (plen >= min_len) & np.isin(src, want)
     pstart, plen = pstart[m], plen[m]
     if len(pstart):
         magic = (u8[pstart + 4].astype(np.uint32) << 16 |
@@ -238,10 +247,14 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
     # reference: (u32_at_byte4 >> 4) & 0x0F, i.e. the upper nibble of byte 7
     fec_id = ((u8[pstart + 7].astype(np.uint32) >> 4) & 0x0F).astype(np.uint8)
 
-    # --- flatten every 6-byte data word, in file order ---
-    # reference: for i in range(0, len(block) - 22, 6): read 6 bytes at i + 16
-    span = plen - 22
-    nwords = np.where(span > 0, (span + 5) // 6, 0)
+    # --- flatten every 6-byte data word, in file order, from byte 16 ---
+    if legacy_word_count:
+        # for i in range(0, len(block) - 22, 6): read 6 bytes at i + 16
+        span = plen - 22
+        nwords = np.where(span > 0, (span + 5) // 6, 0)
+    else:
+        # a trailing partial word (never seen in DAQ data) is ignored
+        nwords = (plen - 16) // 6
     total = int(nwords.sum())
     if total == 0:
         meta.update(_empty_meta(n_packets, src_ips, data_format))
@@ -355,6 +368,8 @@ def iter_chunks(path, data_format="SRS", src_ips=None, max_packets=None,
         "n_invalid_offset": int(n_invalid),
         "offset_constant": bool(len(off_seen) == 1),
     })
+    if legacy_word_count:
+        meta["legacy_word_count"] = True
 
 
 def _empty_meta(n_packets, src_ips, data_format):
