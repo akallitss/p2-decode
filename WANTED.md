@@ -1,10 +1,12 @@
 
-# p2-decode
+# p2basket-decode
 
 ## Scope
 
 Just decode standard SRS pcapng data for now.
 Will evolve when readout out tracks, etc.
+
+Think again about functionality, then remove any unneeded files or functions
 
 ## Desired python features (for discussion! but noted here)
 
