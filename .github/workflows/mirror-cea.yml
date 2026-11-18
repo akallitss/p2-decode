@@ -36,9 +36,27 @@ jobs:
             refs/tags/*)  dst="refs/tags/ak-${GITHUB_REF#refs/tags/}" ;;
             *) echo "::error::unexpected ref $GITHUB_REF"; exit 1 ;;
           esac
-          git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" "${GITHUB_SHA}:${dst}"
+          url="https://oauth2:${GL_TOKEN}@${GL_REPO}"
+          err="${RUNNER_TEMP:-/tmp}/push.err"
+          if ! git push "$url" "${GITHUB_SHA}:${dst}" 2>"$err"; then
+            cat "$err" >&2
+            # A tag that already exists is fine if it is the same commit: the
+            # branch push of the same commit publishes all tags too, and may win
+            # the race. Anything else (other errors, a different commit) fails.
+            case "$dst" in refs/tags/*) ;; *) exit 1 ;; esac
+            grep -q 'already exists' "$err" || exit 1
+            # use the peeled commit (^{}) for an annotated tag, else the ref itself
+            have=$(git ls-remote "$url" "$dst" "${dst}^{}" | awk -v r="$dst" \
+              '$2 == r "^{}" {p = $1} $2 == r {t = $1} END {print (p != "" ? p : t)}')
+            if [ "$have" = "$GITHUB_SHA" ]; then
+              echo "::notice::${dst} already on GitLab at ${GITHUB_SHA}, nothing to do"
+            else
+              echo "::error::${dst} already on GitLab at ${have:-?}, not ${GITHUB_SHA}"
+              exit 1
+            fi
+          fi
           # on a branch push, also publish all existing tags (idempotent)
           if [ "${GITHUB_REF#refs/heads/}" != "$GITHUB_REF" ]; then
             refs=$(git tag -l 'v*' | sed 's|.*|refs/tags/&:refs/tags/ak-&|')
-            [ -n "$refs" ] && git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" $refs || true
+            [ -n "$refs" ] && git push "$url" $refs || true
           fi
