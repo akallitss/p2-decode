@@ -1,9 +1,11 @@
-# Mirror every pushed branch and tag to the CEA GitLab copy of this repo.
+# Publish this repo to the CEA GitLab project, WITHOUT touching its main:
 #   https://drf-gitlab.cea.fr/p2/p2readout/p2basket-decode
+#   GitHub branch X   -> GitLab branch ak/X    (main -> ak/main)
+#   GitHub tag vN.M.K -> GitLab tag ak-vN.M.K
+# GitLab main belongs to the colleagues there; they merge ak/main when they want.
 # Needs the repo secret CEA_GITLAB_TOKEN: a GitLab *project* access token
 # (role Maintainer, scope write_repository) of that GitLab project.
-# Never force-pushes: if someone committed directly on GitLab, this job
-# fails and the histories must be merged by hand (git fetch cea; git merge).
+# Never force-pushes; skips with a warning while the secret is unset.
 name: mirror-to-cea-gitlab
 on:
   push:
@@ -21,7 +23,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-      - name: Push to drf-gitlab
+      - name: Push to drf-gitlab (ak/ branches, ak- tags)
         env:
           GL_TOKEN: ${{ secrets.CEA_GITLAB_TOKEN }}
           GL_REPO: drf-gitlab.cea.fr/p2/p2readout/p2basket-decode.git
@@ -29,4 +31,14 @@ jobs:
           if [ -z "$GL_TOKEN" ]; then
             echo "::warning::CEA_GITLAB_TOKEN not set, skipping mirror"; exit 0
           fi
-          git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" "${GITHUB_REF}:${GITHUB_REF}"
+          case "$GITHUB_REF" in
+            refs/heads/*) dst="refs/heads/ak/${GITHUB_REF#refs/heads/}" ;;
+            refs/tags/*)  dst="refs/tags/ak-${GITHUB_REF#refs/tags/}" ;;
+            *) echo "::error::unexpected ref $GITHUB_REF"; exit 1 ;;
+          esac
+          git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" "${GITHUB_SHA}:${dst}"
+          # on a branch push, also publish all existing tags (idempotent)
+          if [ "${GITHUB_REF#refs/heads/}" != "$GITHUB_REF" ]; then
+            refs=$(git tag -l 'v*' | sed 's|.*|refs/tags/&:refs/tags/ak-&|')
+            [ -n "$refs" ] && git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" $refs || true
+          fi
