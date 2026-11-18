@@ -1,0 +1,32 @@
+# Mirror every pushed branch and tag to the CEA GitLab copy of this repo.
+#   https://drf-gitlab.cea.fr/p2/p2readout/p2basket-decode
+# Needs the repo secret CEA_GITLAB_TOKEN: a GitLab *project* access token
+# (role Maintainer, scope write_repository) of that GitLab project.
+# Never force-pushes: if someone committed directly on GitLab, this job
+# fails and the histories must be merged by hand (git fetch cea; git merge).
+name: mirror-to-cea-gitlab
+on:
+  push:
+    branches: ['**']
+    tags: ['**']
+  workflow_dispatch:
+concurrency:
+  group: mirror-cea
+  cancel-in-progress: false
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push to drf-gitlab
+        env:
+          GL_TOKEN: ${{ secrets.CEA_GITLAB_TOKEN }}
+          GL_REPO: drf-gitlab.cea.fr/p2/p2readout/p2basket-decode.git
+        run: |
+          if [ -z "$GL_TOKEN" ]; then
+            echo "::warning::CEA_GITLAB_TOKEN not set, skipping mirror"; exit 0
+          fi
+          git push "https://oauth2:${GL_TOKEN}@${GL_REPO}" "${GITHUB_REF}:${GITHUB_REF}"
