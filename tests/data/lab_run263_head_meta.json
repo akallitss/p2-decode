@@ -1,0 +1,13 @@
+{
+ "data_format": "SRS",
+ "fec_ips": [
+  "192.168.1.13"
+ ],
+ "live_time_s": 0.326180352,
+ "n_hits": 44676,
+ "n_invalid_offset": 2,
+ "n_markers": 4560,
+ "n_packets": 33,
+ "n_vm3_packets": 33,
+ "n_words": 49236
+}

@@ -22,7 +22,14 @@ def decode(path, data_format="SRS", src_ips=None, max_packets=None,
     Holds every hit in memory. For multi-GB captures use `decode_to`, which
     streams to disk instead -- a full 2 GB run is ~3e8 hits, which is ~18 GB
     as a DataFrame.
+
+    `path` may also be a Packets batch (from get_packets / PacketSource): its
+    packets are decoded with a fresh marker state (see source.decode_packets).
     """
+    from .source import Packets, decode_packets
+    if isinstance(path, Packets):
+        return decode_packets(path, data_format, calibration, legacy_word_count,
+                              max_words)
     meta = {}
     parts = list(iter_chunks(path, data_format, src_ips, max_packets,
                              calibration, max_words, meta, legacy_word_count))

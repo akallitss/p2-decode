@@ -10,9 +10,11 @@ Layers, bottom up:
     api, store   whole-capture decode in memory, or streamed to a column store
     follow       a capture still being written: PcapngFollower, StreamDecoder
     udp          the FEC's UDP stream itself, no file: UdpStreamDecoder
+    source       bounded batches from a file or a port: get_packets, get_hits,
+                 PacketSource / HitSource (carry on from the last batch)
 """
 
-__version__ = "0.8.1"
+__version__ = "0.9.0"
 
 from .api import decode                                         # noqa: E402
 from .calibration import derive, load_calibration               # noqa: E402
@@ -23,12 +25,15 @@ from .schema import (CLOCK_PERIOD_NS, COLUMN_DTYPES, COLUMNS,   # noqa: E402
 from .srs import MAX_WORDS, WordDecoder, detect_fec_ips, iter_chunks  # noqa: E402
 from .store import HitWriter, decode_to, load_frame, load_hits  # noqa: E402
 from .udp import UdpReceiver, UdpStreamDecoder                  # noqa: E402
+from .source import (HitSource, Packets, PacketSource,          # noqa: E402
+                     decode_packets, get_hits, get_packets)
 
 __all__ = [
     "decode", "decode_to", "load_hits", "load_frame", "derive",
     "load_calibration", "iter_chunks", "read_packets", "detect_fec_ips",
     "HitWriter", "empty_hits", "PcapngFollower", "StreamDecoder", "WordDecoder",
-    "UdpReceiver", "UdpStreamDecoder", "COLUMNS", "RAW_COLUMNS", "DERIVED_COLUMNS",
+    "UdpReceiver", "UdpStreamDecoder", "get_packets", "get_hits", "decode_packets",
+    "Packets", "PacketSource", "HitSource", "COLUMNS", "RAW_COLUMNS", "DERIVED_COLUMNS",
     "COLUMN_DTYPES", "CLOCK_PERIOD_NS", "MAX_WORDS", "SCHEMA_VERSION",
     "__version__",
 ]

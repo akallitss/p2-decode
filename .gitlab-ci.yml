@@ -1,0 +1,18 @@
+# Test suite for the CEA GitLab copy (drf-gitlab p2/p2readout).
+# Not run on the ak/* branches: those are mirrored from GitHub, where the same
+# tests already run (.github/workflows/tests.yml).
+# Note (2026-11-18): the instance's shared runners were paused/stale, so
+# pipelines wait as "pending" until a runner is available.
+workflow:
+  rules:
+    - if: '$CI_COMMIT_BRANCH =~ /^ak\//'
+      when: never
+    - if: '$CI_COMMIT_TAG =~ /^ak-/'
+      when: never
+    - when: always
+
+pytest:
+  image: python:3.12
+  script:
+    - pip install -e ".[test]"
+    - pytest -q

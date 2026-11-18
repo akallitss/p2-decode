@@ -30,8 +30,29 @@ cols, info = sd.poll()                             # hits since the last poll (o
 sd.meta()                                          # cumulative, as decode() reports it
 ```
 
+Bounded batches, from a file or straight from the FEC's UDP port (0.9):
+
+```python
+from p2_decode import get_packets, get_hits, decode, HitSource
+
+packets = get_packets(file="cap.pcapng", npackets=1000)   # first 1000 VM3 packets
+hits, meta = decode(packets)                              # ... decoded
+hits = get_hits(file="cap.pcapng", duration=2.0)          # first 2 s of data time
+hits = get_hits(port=6006, duration=5.0)                  # 5 s off the network
+
+src = HitSource(file="cap.pcapng")      # or port="192.168.1.16:6006", or follow=True
+a = src.get(npackets=1000)              # carries on from the last batch,
+b = src.get(duration=1.0)               # marker state kept: same hits as one decode()
+```
+
+`npackets` counts VM3 packets; `duration` is seconds of packet (data) time. With
+both, the first reached wins. Markers are not returned as rows: each one sets
+`srs_timestamp` / `trigger_time` on the following hits of its VMM.
+
 ```bash
 p2-decode capture.pcapng [--format SRS|TRG] [--out-dir DIR] [--max-packets N]
+p2-decode --file capture.pcapng --npackets N | --duration S [--out-dir DIR]
+p2-decode --port [HOST:]PORT --npackets N | --duration S [--out-dir DIR]
 ```
 
 ## Layers
@@ -42,6 +63,7 @@ p2-decode capture.pcapng [--format SRS|TRG] [--out-dir DIR] [--max-packets N]
 | `srs` | SRS header, 6-byte VMM words, marker state machine, FEC IP detection |
 | `calibration` | derived columns (timing, calibrated ADC), vmm-sdat calibration loader |
 | `api`, `store` | in-memory decode; streaming `.npy` column store |
+| `source` | `get_packets`, `get_hits`, `PacketSource` / `HitSource`: bounded batches (npackets, duration) from a file, a growing file or a UDP port |
 | `follow` | `PcapngFollower` (complete blocks appended since the last read), `StreamDecoder` (polls with marker state carried over) |
 | `schema` | column names, dtypes, timing constants, `SCHEMA_VERSION` |
 
@@ -56,7 +78,7 @@ Derived on load: `timestamp_ns abs_time_ns` (float64), `adc_calibrated`
 ## Tests
 
 ```bash
-pytest                                  # synthetic captures, no data needed
+pytest                                  # synthetic captures + the small real one, no data disk needed
 P2_DECODE_LEGACY=.../vmm_decode.py \
 P2_DECODE_CAPTURES=a.pcapng:b.pcapng pytest tests/test_legacy.py
 ```
@@ -65,7 +87,24 @@ P2_DECODE_CAPTURES=a.pcapng:b.pcapng pytest tests/test_legacy.py
 `P2_basket_online_analysis/vmm_decode.py` in SRS and TRG modes. It runs that comparison with `legacy_word_count=True` (see
 below) and separately checks what the default adds.
 
+`test_reference.py` decodes a small real capture, `tests/data/lab_run263_head.pcapng`
+(33 packets of the lab cosmic stand, 298 kB), through every entry point -- whole
+file, column store, batches, replayed through a UDP port -- and compares with the
+reference hits next to it. That reference passed `test_legacy.py` when it was
+made; `tests/data/make_reference.py` says how, and regenerates it.
+
+CI: `.github/workflows/tests.yml` runs `pytest` on every push (Python 3.9, 3.12,
+3.13); `.gitlab-ci.yml` does the same on the CEA GitLab copy, except on the
+mirrored `ak/*` branches.
+
 ## Versions
+
+- **0.9.0** `get_packets` / `get_hits` (file or port, `npackets=`, `duration=`),
+  `PacketSource` / `HitSource` to carry on batch after batch, `decode(packets)`;
+  `p2-decode --port`, `--duration`, `--file`, `--npackets` (= `--max-packets`).
+  A small real capture with reference hits under `tests/data`; CI on GitHub
+  and GitLab. Nothing existing changed: `decode(path)`, `iter_chunks`, `derive`,
+  the store and the existing CLI options behave as in 0.8.1.
 
 - **0.8.1** decoded chunks (iter_chunks, StreamDecoder, UdpStreamDecoder) carry
   `pkt_time_ns`, the packet's capture/receive time per hit, for rate-vs-time;
